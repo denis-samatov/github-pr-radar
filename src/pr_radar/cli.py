@@ -1,4 +1,4 @@
-"""Summarize public repository pull requests through the GitHub REST API."""
+"""Command-line interface for read-only pull request triage."""
 
 from __future__ import annotations
 
@@ -6,85 +6,69 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
-API = "https://api.github.com"
-
-
-def fetch_prs(repository: str, state: str = "open", limit: int = 30, token: str | None = None) -> list[dict]:
-    """Retrieve up to ``limit`` PRs from the GitHub REST API, including pagination."""
-    if not (1 <= limit <= 500):
-        raise ValueError("limit must be between 1 and 500")
-    try:
-        owner, repo = repository.split("/")
-    except ValueError as exc:
-        raise ValueError("repository must use OWNER/REPO format") from exc
-    if not owner or not repo or any(ch.isspace() for ch in repository):
-        raise ValueError("repository must use OWNER/REPO format")
-    if state not in {"open", "closed", "all"}:
-        raise ValueError("invalid state")
-    result: list[dict] = []
-    while len(result) < limit:
-        page_size = min(100, limit - len(result))
-        query = urlencode({"state": state, "sort": "updated", "direction": "desc", "per_page": page_size, "page": len(result) // 100 + 1})
-        url = f"{API}/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/pulls?{query}"
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-pr-radar/0.1.0"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        with urlopen(Request(url, headers=headers), timeout=15) as response:
-            batch = json.load(response)
-        if not isinstance(batch, list):
-            raise ValueError("unexpected API response")
-        result.extend(batch)
-        if len(batch) < page_size:
-            break
-    return result[:limit]
-
-
-def summarize(prs: list[dict], days: int = 14, now: datetime | None = None) -> dict:
-    """Aggregate PR information; a stale PR has not been updated for ``days`` days."""
-    if days < 0:
-        raise ValueError("days must be non-negative")
-    now = now or datetime.now(timezone.utc)
-    stale = []
-    draft_count = 0
-    for pr in prs:
-        draft_count += bool(pr.get("draft", False))
-        updated_at = datetime.fromisoformat(pr["updated_at"].replace("Z", "+00:00"))
-        age = (now - updated_at).total_seconds() / 86400
-        if age >= days:
-            stale.append({"number": pr["number"], "title": pr["title"], "url": pr["html_url"], "days_since_update": round(age, 1)})
-    stale.sort(key=lambda item: item["days_since_update"], reverse=True)
-    return {"total": len(prs), "draft": draft_count, "stale": stale, "stale_count": len(stale)}
+from .github import GitHubClient, fetch_prs
+from .report import enrich, markdown, summarize
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect GitHub pull request activity")
     parser.add_argument("repository", help="GitHub repository as OWNER/REPO")
     parser.add_argument("--state", choices=["open", "closed", "all"], default="open")
-    parser.add_argument("--limit", type=int, default=30, help="Maximum PRs to inspect (1-500)")
+    parser.add_argument("--limit", type=int, default=30, help="Maximum PRs to fetch before filtering (1-500)")
     parser.add_argument("--stale-days", type=int, default=14)
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    output.add_argument("--markdown", action="store_true", help="Print a Markdown report")
+    parser.add_argument("--author", help="Filter fetched PRs by author (case-insensitive)")
+    parser.add_argument("--label", action="append", default=[], help="Require label; repeat to require multiple labels")
+    parser.add_argument("--exclude-drafts", action="store_true")
+    parser.add_argument("--details", action="store_true", help="Fetch reviews, check runs and commit statuses (extra API requests)")
+    parser.add_argument("--fail-on-stale", action="store_true", help="Exit 2 if matching stale PRs exist")
     args = parser.parse_args(argv)
+    if args.stale_days < 0:
+        parser.error("--stale-days must be non-negative")
+    if not 1 <= args.limit <= 500:
+        parser.error("--limit must be between 1 and 500")
     try:
-        prs = fetch_prs(args.repository, args.state, args.limit, os.getenv("GITHUB_TOKEN"))
-        report = summarize(prs, args.stale_days)
+        token = os.getenv("GITHUB_TOKEN")
+        prs = fetch_prs(args.repository, args.state, args.limit, token)
+        matched = [pr for pr in prs if
+                   (not args.author or (pr.get("user") or {}).get("login", "").lower() == args.author.lower())
+                   and (not args.exclude_drafts or not pr.get("draft"))
+                   and set(args.label).issubset({label["name"] for label in pr.get("labels", [])})]
+        report = {"repository": args.repository, "state": args.state, "scanned": len(prs),
+                  "limit": args.limit, "stale_days": args.stale_days, **summarize(matched, args.stale_days)}
+        if args.details:
+            enrich(report, matched, args.repository, GitHubClient(token))
     except (ValueError, HTTPError, URLError, TimeoutError) as exc:
-        if isinstance(exc, HTTPError) and exc.code in {403, 429}:
-            print("GitHub API rate limit or access restriction. Try again later or set GITHUB_TOKEN.", file=sys.stderr)
+        if isinstance(exc, HTTPError):
+            messages = {401: "Authentication failed; check GITHUB_TOKEN.",
+                        403: "GitHub denied access or rate limit exceeded; check token permissions and rate limits.",
+                        404: "Repository not found or not accessible to this token.",
+                        429: "GitHub rate limit exceeded; try again later."}
+            message = messages.get(exc.code, f"GitHub API returned HTTP {exc.code}.")
+        elif isinstance(exc, (URLError, TimeoutError)):
+            message = "Could not reach GitHub API; check your connection and try again."
         else:
-            print(f"Error: {exc}", file=sys.stderr)
+            message = str(exc)
+        print(f"Error: {message}", file=sys.stderr)
         return 1
     if args.json:
-        print(json.dumps({"repository": args.repository, **report}, indent=2))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    elif args.markdown:
+        print(markdown(args.repository, report), end="")
     else:
-        print(f"{args.repository}: {report['total']} PR(s), {report['draft']} draft(s), {report['stale_count']} stale (≥{args.stale_days} days)")
-        for item in report["stale"]:
-            print(f"  #{item['number']} ({item['days_since_update']} days) {item['title']}\n    {item['url']}")
-    return 0
+        print(f"{args.repository}: {report['total']} PR(s), {report['draft']} draft(s), {report['stale_count']} stale (≥{args.stale_days} days); scanned {len(prs)}")
+        for item in report["pull_requests"]:
+            flags = [flag for flag, enabled in (("draft", item["draft"]), ("stale", item["stale"])) if enabled]
+            if args.details:
+                flags += [f"CI: {item['ci']}", f"review: {item['review']}", "actions: " + ", ".join(item["actions"])]
+            print(f"  #{item['number']} ({item['days_since_update']} days) {item['title']} [{'; '.join(flags)}]\n    {item['url']}")
+            for warning in item.get("warnings", []):
+                print(f"Warning: #{item['number']}: {warning}", file=sys.stderr)
+    return 2 if args.fail_on_stale and report["stale_count"] else 0
 
 
 if __name__ == "__main__":
