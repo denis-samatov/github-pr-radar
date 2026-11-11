@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "github-pr-radar"
-version = "0.1.0"
-description = "Tiny CLI for analyzing GitHub pull request activity with the REST API"
+version = "0.2.0"
+description = "Read-only GitHub pull request triage with CI, review signals and Markdown reports"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

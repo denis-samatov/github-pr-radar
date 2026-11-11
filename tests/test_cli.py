@@ -29,7 +29,7 @@ class RadarTests(unittest.TestCase):
         self.assertEqual(output["stale_count"], 1)
         self.assertEqual(output["stale"][0]["number"], 1)
 
-    @patch("pr_radar.cli.urlopen")
+    @patch("pr_radar.github.urlopen")
     def test_fetch_public_api(self, mock_open):
         mock_open.return_value = FakeResponse([{"number": 1}])
         result = fetch_prs("owner/repo", limit=10)
@@ -38,7 +38,7 @@ class RadarTests(unittest.TestCase):
         self.assertIn("/repos/owner/repo/pulls?", request.full_url)
         self.assertNotIn("Authorization", request.headers)
 
-    @patch("pr_radar.cli.urlopen")
+    @patch("pr_radar.github.urlopen")
     def test_auth_header(self, mock_open):
         mock_open.return_value = FakeResponse([])
         fetch_prs("owner/repo", token="secret")
