@@ -34,10 +34,10 @@ No runtime dependencies, no LLM account, and no repository writes.
 
 ## Quick start
 
-Requires Python 3.10+.
+Requires Python 3.10+ and Git. Install the [v0.2.0 release](https://github.com/denis-samatov/github-pr-radar/releases/tag/v0.2.0):
 
 ```bash
-python -m pip install -e .
+python -m pip install "git+https://github.com/denis-samatov/github-pr-radar.git@v0.2.0"
 pr-radar python/cpython --limit 50 --stale-days 30
 pr-radar owner/repo --author denis-samatov --exclude-drafts
 pr-radar owner/repo --label bug --label backend --details
@@ -45,7 +45,7 @@ pr-radar owner/repo --details --markdown > pr-report.md
 pr-radar owner/repo --json > pr-report.json
 ```
 
-Or without installation:
+From a local checkout, run `python -m pip install -e .` for development or use the CLI without installing it:
 
 ```bash
 PYTHONPATH=src python -m pr_radar owner/repo --limit 10
