@@ -2,6 +2,25 @@
 
 A dependency-free Python CLI for **read-only pull request triage** through the GitHub REST API. Find inactive PRs, filter your review queue, inspect CI and review signals, and export a report for humans or automation.
 
+<p align="center">
+  <a href="#quick-start"><img alt="Run your first report" src="https://img.shields.io/badge/Run%20your%20first%20report-0F766E?style=for-the-badge" height="32"></a>
+  <a href="#interpreting-signals"><img alt="Read the triage signals" src="https://img.shields.io/badge/Read%20the%20triage%20signals-1D4ED8?style=for-the-badge" height="32"></a>
+  <a href="#ci-integration"><img alt="Use in GitHub Actions" src="https://img.shields.io/badge/Use%20in%20GitHub%20Actions-475569?style=for-the-badge" height="32"></a>
+</p>
+
+<details>
+<summary>Pick an output for your review queue</summary>
+
+| Reader | Option | Use |
+| --- | --- | --- |
+| Reviewer at a terminal | `--details` | Add the CI and review signals to each row. |
+| Team reviewing a report | `--markdown` | Save a Markdown report the team can read. |
+| A scheduled job | `--json` and optionally `--fail-on-stale` | Read structured results and exit with a policy status if requested. |
+
+Use [Interpreting signals](#interpreting-signals) to distinguish missing checks from a passing or failing result.
+
+</details>
+
 ## What it reports
 
 - PR number, title, author, labels, draft status and days since last update
